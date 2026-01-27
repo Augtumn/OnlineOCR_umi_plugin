@@ -5,18 +5,32 @@ from urllib import request, parse
 from urllib.error import URLError, HTTPError
 import ssl
 
-# 忽略 SSL 验证（可选）
-ssl._create_default_https_context = ssl._create_unverified_context
-
-
 class Api:
     def __init__(self, global_argd):
         self.api_key = global_argd.get("api_key", "").strip()
         self.secret_key = global_argd.get("secret_key", "").strip()
         self.timeout = global_argd.get("timeout", 10)
+        self.ssl_verify = global_argd.get("ssl_verify", True)
 
         self.access_token = None
+        self._last_error = ""
         # URL 映射将在 _ocr_request 中动态构建，此处无需预设
+
+    def _err(self, message, kind="request", code=102):
+        if not message:
+            message = "未知错误"
+        if message.startswith("[Error]"):
+            data = message
+            clean = message[len("[Error]"):].strip()
+        else:
+            data = f"[Error] {message}"
+            clean = message
+        return {"code": code, "data": data, "error": {"message": clean, "type": kind}}
+
+    def _get_ssl_context(self):
+        if self.ssl_verify:
+            return None
+        return ssl._create_unverified_context()
 
     def _get_access_token(self):
         url = 'https://aip.baidubce.com/oauth/2.0/token'
@@ -30,16 +44,42 @@ class Api:
         try:
             req = request.Request(url, data=data, method='POST')
             req.add_header('Content-Type', 'application/x-www-form-urlencoded')
-            with request.urlopen(req, timeout=self.timeout) as f:
+            with request.urlopen(req, timeout=self.timeout, context=self._get_ssl_context()) as f:
                 result = json.loads(f.read().decode('utf-8'))
                 if 'access_token' in result:
+                    self._last_error = ""
                     return result['access_token']
-                else:
-                    print(f"[Error] 获取access_token失败: {result}")
-                    return None
-        except Exception as e:
-            print(f"[Error] 获取access_token异常: {str(e)}")
+                self._last_error = f"[Error] 获取access_token失败: {result}"
+                return None
+        except HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode('utf-8')
+            except Exception:
+                pass
+            detail = body or str(e.reason)
+            self._last_error = f"[Error] 获取access_token HTTP {e.code}: {detail}"
             return None
+        except URLError as e:
+            self._last_error = f"[Error] 获取access_token网络异常: {str(e.reason)}"
+            return None
+        except Exception as e:
+            self._last_error = f"[Error] 获取access_token异常: {str(e)}"
+            return None
+
+    def _encode_bytes(self, image_bytes):
+        try:
+            return base64.b64encode(image_bytes).decode("utf-8"), ""
+        except Exception as e:
+            return "", f"[Error] 图片编码失败: {str(e)}"
+
+    def _read_image_as_base64(self, img_path: str):
+        try:
+            with open(img_path, "rb") as f:
+                image_bytes = f.read()
+            return self._encode_bytes(image_bytes)
+        except Exception as e:
+            return "", f"[Error] 读取图片失败: {str(e)}"
 
     def start(self, argd):
         new_api_key = argd.get("api_key", "").strip()
@@ -51,6 +91,7 @@ class Api:
             self.secret_key = new_secret_key
 
         self.timeout = argd.get("timeout", self.timeout)
+        self.ssl_verify = argd.get("ssl_verify", self.ssl_verify)
 
         if not self.api_key:
             return "[Error] API Key 不能为空，请在插件设置中填写。"
@@ -59,7 +100,7 @@ class Api:
 
         self.access_token = self._get_access_token()
         if not self.access_token:
-            return "[Error] 无法获取 access_token，请检查密钥是否正确或网络连接。"
+            return self._last_error or "[Error] 无法获取 access_token，请检查密钥是否正确或网络连接。"
 
         # 局部配置（表格识别不需要 language_type 等）
         self.api_type = argd.get("api_type", "general")
@@ -76,8 +117,10 @@ class Api:
         self.access_token = None
 
     def _ocr_request(self, image_base64):
+        if not image_base64 or len(image_base64) < 10:
+            return self._err("图像数据为空或无效", kind="input")
         if not self.access_token:
-            return {"code": 102, "data": "[Error] access_token 未获取"}
+            return self._err("access_token 未获取", kind="auth")
 
         # 所有支持的接口 URL
         urls = {
@@ -93,7 +136,7 @@ class Api:
         }
 
         if self.api_type not in urls:
-            return {"code": 102, "data": f"[Error] 不支持的接口: {self.api_type}"}
+            return self._err(f"不支持的接口: {self.api_type}", kind="api")
 
         url = f"{urls[self.api_type]}?access_token={self.access_token}"
 
@@ -117,27 +160,33 @@ class Api:
         try:
             req = request.Request(url, data=data, method='POST')
             req.add_header('Content-Type', 'application/x-www-form-urlencoded')
-            with request.urlopen(req, timeout=self.timeout) as f:
+            with request.urlopen(req, timeout=self.timeout, context=self._get_ssl_context()) as f:
                 result = json.loads(f.read().decode('utf-8'))
+        except HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode('utf-8')
+            except Exception:
+                pass
+            detail = body or str(e.reason)
+            return self._err(f"HTTP {e.code}: {detail}", kind="http")
+        except URLError as e:
+            return self._err(f"网络异常: {str(e.reason)}", kind="network")
         except Exception as e:
-            return {"code": 102, "data": f"[Error] 请求失败: {str(e)}"}
+            return self._err(f"请求失败: {str(e)}", kind="request")
 
         return self._parse_result(result)
 
     def runPath(self, img_path: str):
-        try:
-            with open(img_path, "rb") as f:
-                image_bytes = f.read()
-            image_base64 = base64.b64encode(image_bytes).decode("utf-8")
-        except Exception as e:
-            return {"code": 102, "data": f"[Error] 读取图片失败: {str(e)}"}
+        image_base64, err = self._read_image_as_base64(img_path)
+        if err:
+            return self._err(err, kind="io")
         return self._ocr_request(image_base64)
 
     def runBytes(self, image_bytes):
-        try:
-            image_base64 = base64.b64encode(image_bytes).decode("utf-8")
-        except Exception as e:
-            return {"code": 102, "data": f"[Error] 图片编码失败: {str(e)}"}
+        image_base64, err = self._encode_bytes(image_bytes)
+        if err:
+            return self._err(err, kind="encode")
         return self._ocr_request(image_base64)
 
     def runBase64(self, image_base64: str):
@@ -146,7 +195,7 @@ class Api:
     def _parse_result(self, result):
         if "error_code" in result:
             msg = result.get("error_msg", "未知错误")
-            return {"code": 102, "data": f"[Error] {msg}"}
+            return self._err(msg, kind="api")
 
         data = []
         api = self.api_type
@@ -253,7 +302,7 @@ class Api:
             }
 
         else:
-            return {"code": 102, "data": f"[Error] 不支持的结果解析: {api}"}
+            return self._err(f"不支持的结果解析: {api}", kind="api")
 
         if not data:
             return {"code": 101, "data": ""}

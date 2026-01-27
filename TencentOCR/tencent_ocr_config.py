@@ -24,7 +24,13 @@ globalOptions = {
         "min": 5,
         "max": 60,
         "unit": tr("秒"),
-    }
+    },
+    "ssl_verify": {
+        "title": tr("SSL 验证"),
+        "type": "boolean",
+        "default": True,
+        "toolTip": tr("是否启用 SSL 证书验证。关闭可绕过证书问题，但不安全。"),
+    },
 }
 
 # 局部配置（仅保留文本 + 表格识别）
@@ -82,6 +88,46 @@ localOptions = {
         ],
         "default": "ap-guangzhou",
         "toolTip": tr("选择最近的区域以降低延迟"),
+    },
+    "timeout": {
+        "title": tr("超时时间"),
+        "type": "number",
+        "default": 10,
+        "min": 5,
+        "max": 60,
+        "unit": tr("秒"),
+        "toolTip": tr("仅对本次识别生效，优先于全局超时设置。"),
+    },
+    "ssl_verify": {
+        "title": tr("SSL 验证"),
+        "type": "boolean",
+        "default": True,
+        "toolTip": tr("仅对本次识别生效。关闭可绕过证书问题，但不安全。"),
+    },
+    "is_pdf": {
+        "title": tr("PDF 模式"),
+        "type": "boolean",
+        "default": False,
+        "toolTip": tr("表格识别为 PDF 时请开启。"),
+    },
+    "pdf_page_number": {
+        "title": tr("PDF 页码"),
+        "type": "number",
+        "default": 1,
+        "min": 1,
+        "max": 200,
+        "unit": tr("页"),
+        "toolTip": tr("仅在 PDF 模式下生效。"),
+    },
+    "table_language": {
+        "title": tr("表格语言"),
+        "type": "enum",
+        "optionsList": [
+            ["zh", tr("中文")],
+            ["jap", tr("日文")],
+        ],
+        "default": "zh",
+        "toolTip": tr("仅对表格识别（V2）生效。"),
     },
 
 }

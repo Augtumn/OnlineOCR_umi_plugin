@@ -24,6 +24,12 @@ globalOptions = {
         "min": 5,
         "max": 60,
         "unit": tr("秒"),
+    },
+    "ssl_verify": {
+        "title": tr("SSL 验证"),
+        "type": "boolean",
+        "default": True,
+        "toolTip": tr("是否启用 SSL 证书验证。关闭可绕过证书问题，但不安全。"),
     }
 }
 

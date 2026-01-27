@@ -5,6 +5,8 @@ import json
 import time
 from datetime import datetime
 from urllib import request
+from urllib.error import URLError, HTTPError
+import ssl
 
 
 class Api:
@@ -12,6 +14,7 @@ class Api:
         self.secret_id = global_argd.get("secret_id", "").strip()
         self.secret_key = global_argd.get("secret_key", "").strip()
         self.timeout = global_argd.get("timeout", 10)
+        self.ssl_verify = global_argd.get("ssl_verify", True)
         self.host = None
         self.endpoint = None
         self.region = "ap-guangzhou"
@@ -37,21 +40,38 @@ class Api:
         if self.api_type not in supported_apis:
             return f"不支持的接口: {self.api_type}"
 
+        if not self.secret_id:
+            return "[Error] SecretId 不能为空，请在插件设置中填写。"
+        if not self.secret_key:
+            return "[Error] SecretKey 不能为空，请在插件设置中填写。"
+
+        self.region = argd.get("region", self.region)
+        self.ssl_verify = argd.get("ssl_verify", self.ssl_verify)
+
+        self.is_pdf = argd.get("is_pdf", False)
+        pdf_page_number = argd.get("pdf_page_number", 1)
+        try:
+            self.pdf_page_number = max(1, int(pdf_page_number))
+        except Exception:
+            self.pdf_page_number = 1
+        self.table_language = argd.get("table_language", "zh").strip().lower()
+
         # GeneralBasicOCR 特有参数
         if self.api_type == "GeneralBasicOCR":
             user_lang = argd.get("language_type", "auto").strip().lower()
             valid_language_types = {
                 'auto': 'auto', 'zh': 'zh', 'chinese': 'zh', 'zh_rare': 'zh_rare',
-                'mix': 'mix', 'jap': 'jap', 'japanese': 'jap', 'kor': 'kor',
-                'korean': 'kor', 'spa': 'spa', 'spanish': 'spa', 'fre': 'fre',
-                'french': 'fre', 'ger': 'ger', 'german': 'ger', 'por': 'por',
-                'portuguese': 'por', 'vie': 'vie', 'vietnamese': 'vie', 'may': 'may',
-                'malay': 'may', 'rus': 'rus', 'russian': 'rus', 'ita': 'ita',
-                'italian': 'ita', 'hol': 'hol', 'dutch': 'hol', 'swe': 'swe',
+                'mix': 'mix', 'jap': 'jap', 'ja': 'jap', 'jp': 'jap', 'japanese': 'jap',
+                'kor': 'kor', 'ko': 'kor', 'korean': 'kor', 'spa': 'spa', 'spanish': 'spa',
+                'fre': 'fre', 'fr': 'fre', 'french': 'fre', 'ger': 'ger', 'de': 'ger',
+                'german': 'ger', 'por': 'por', 'pt': 'por', 'portuguese': 'por',
+                'vie': 'vie', 'vietnamese': 'vie', 'may': 'may', 'malay': 'may',
+                'rus': 'rus', 'ru': 'rus', 'russian': 'rus', 'ita': 'ita',
+                'it': 'ita', 'italian': 'ita', 'hol': 'hol', 'dutch': 'hol', 'swe': 'swe',
                 'swedish': 'swe', 'fin': 'fin', 'finnish': 'fin', 'dan': 'dan',
                 'danish': 'dan', 'nor': 'nor', 'norwegian': 'nor', 'hun': 'hun',
                 'hungarian': 'hun', 'tha': 'tha', 'thai': 'tha', 'hi': 'hi',
-                'hindi': 'hi', 'ara': 'ara', 'arabic': 'ara'
+                'hindi': 'hi', 'ara': 'ara', 'arabic': 'ara', 'en': 'auto', 'english': 'auto'
             }
             self.language_type = valid_language_types.get(user_lang, 'auto')
         else:
@@ -59,21 +79,22 @@ class Api:
 
         # RecognizeTableOCR 特有参数
         if self.api_type == "RecognizeTableOCR":
-            self.is_pdf = argd.get("is_pdf", False)
-            self.pdf_page_number = argd.get("pdf_page_number", 1)
-            table_lang = argd.get("table_language", "zh").strip().lower()
-            self.table_language = "jap" if table_lang in ("jap", "japanese") else "zh"
+            self.table_language = "jap" if self.table_language in ("jap", "japanese") else "zh"
 
         # RecognizeTableAccurateOCR 特有参数
         if self.api_type == "RecognizeTableAccurateOCR":
-            # 即使是图片，也设为默认值 1（安全，且符合 API 要求）
-            self.pdf_page_number = argd.get("pdf_page_number", 1)
+            # PDF 时传页码，图片则不传
+            pass
             
         # 在 RecognizeTableAccurateOCR 之后添加：
         if self.api_type == "TableOCR":
             # TableOCR 无特殊参数，仅需图片
-            self.timeout = argd.get("timeout", 30)
-        self.timeout = argd.get("timeout", 30)
+            pass
+        timeout = argd.get("timeout")
+        if timeout is not None:
+            self.timeout = timeout
+        elif self.api_type == "TableOCR":
+            self.timeout = max(self.timeout, 30)
 
         config = self._get_api_config()
         if not config:
@@ -87,6 +108,86 @@ class Api:
 
     def stop(self):
         pass
+
+    def _err(self, message, kind="request", code=102):
+        if not message:
+            message = "未知错误"
+        if message.startswith("[Error]"):
+            data = message
+            clean = message[len("[Error]"):].strip()
+        else:
+            data = f"[Error] {message}"
+            clean = message
+        return {"code": code, "data": data, "error": {"message": clean, "type": kind}}
+
+    def _get_ssl_context(self):
+        if self.ssl_verify:
+            return None
+        return ssl._create_unverified_context()
+
+    def _grid_from_cells(self, cells):
+        if not cells:
+            return []
+        max_row = max(cell.get("RowBr", 0) for cell in cells)
+        max_col = max(cell.get("ColBr", 0) for cell in cells)
+        if max_row <= 0 or max_col <= 0:
+            return []
+        grid = [["" for _ in range(max_col)] for _ in range(max_row)]
+        for cell in cells:
+            row_tl = cell.get("RowTl", -1)
+            col_tl = cell.get("ColTl", -1)
+            text = cell.get("Text", "")
+            if 0 <= row_tl < max_row and 0 <= col_tl < max_col:
+                if grid[row_tl][col_tl] == "":
+                    grid[row_tl][col_tl] = text
+        return grid
+
+    def _grid_to_text(self, grid):
+        lines = []
+        for row in grid:
+            line = "\t".join(str(cell) for cell in row if cell)
+            if line.strip():
+                lines.append(line)
+        return "\n".join(lines)
+
+    def _safe_table_box(self, cells):
+        min_x = None
+        min_y = None
+        max_x = None
+        max_y = None
+
+        def add_point(x, y):
+            nonlocal min_x, min_y, max_x, max_y
+            if x is None or y is None:
+                return
+            if min_x is None or x < min_x:
+                min_x = x
+            if min_y is None or y < min_y:
+                min_y = y
+            if max_x is None or x > max_x:
+                max_x = x
+            if max_y is None or y > max_y:
+                max_y = y
+
+        for cell in cells or []:
+            polygon = cell.get("Polygon") or cell.get("polygon")
+            if isinstance(polygon, list):
+                for pt in polygon:
+                    if isinstance(pt, dict):
+                        add_point(pt.get("X", pt.get("x")), pt.get("Y", pt.get("y")))
+            rect = cell.get("Rect") or cell.get("rect") or cell.get("Location") or cell.get("location")
+            if isinstance(rect, dict):
+                x = rect.get("X", rect.get("x"))
+                y = rect.get("Y", rect.get("y"))
+                w = rect.get("Width", rect.get("width"))
+                h = rect.get("Height", rect.get("height"))
+                if x is not None and y is not None and w is not None and h is not None:
+                    add_point(x, y)
+                    add_point(x + w, y + h)
+
+        if min_x is None or min_y is None or max_x is None or max_y is None:
+            return [[0, 0], [1, 0], [1, 1], [0, 1]]
+        return [[min_x, min_y], [max_x, min_y], [max_x, max_y], [min_x, max_y]]
 
     def _get_api_config(self):
         common_config = {
@@ -131,10 +232,8 @@ class Api:
             payload["TableLanguage"] = self.table_language
         # RecognizeTableAccurateOCR 参数
         elif self.api_type == "RecognizeTableAccurateOCR":
-            # 如果你确定只用图片，可以完全不传 PdfPageNumber
-            # 腾讯云会自动识别为图片
-            # payload["PdfPageNumber"] = self.pdf_page_number  # ← 注释掉这行
-            pass
+            if self.is_pdf:
+                payload["PdfPageNumber"] = self.pdf_page_number
         # TableOCR：仅需 ImageBase64，无其他参数
         elif self.api_type == "TableOCR":
             # payload 已包含 ImageBase64，无需额外操作
@@ -183,7 +282,7 @@ class Api:
 
     def _ocr_request(self, image_base64):
         if not image_base64 or len(image_base64) < 10:
-            return {"code": 102, "data": "[Error] 图像数据为空或无效"}
+            return self._err("图像数据为空或无效", kind="input")
 
         try:
             params = {"image_base64": image_base64}
@@ -198,18 +297,28 @@ class Api:
             req.add_header("X-TC-Region", self.region)
             req.add_header("X-TC-Timestamp", str(timestamp))
 
-            with request.urlopen(req, timeout=self.timeout) as f:
+            with request.urlopen(req, timeout=self.timeout, context=self._get_ssl_context()) as f:
                 response = json.loads(f.read().decode("utf-8"))
 
             resp = response.get("Response", {})
             if "Error" in resp:
                 err = resp["Error"]
-                return {"code": 102, "data": f"[Error] {err.get('Code')}: {err.get('Message')}"}
+                return self._err(f"{err.get('Code')}: {err.get('Message')}", kind="api")
 
             return self._parse_result(resp)
 
+        except HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode("utf-8")
+            except Exception:
+                pass
+            detail = body or str(e.reason)
+            return self._err(f"HTTP {e.code}: {detail}", kind="http")
+        except URLError as e:
+            return self._err(f"网络异常: {str(e.reason)}", kind="network")
         except Exception as e:
-            return {"code": 102, "data": f"[Error] 请求失败: {str(e)}"}
+            return self._err(f"请求失败: {str(e)}", kind="request")
 
     def runPath(self, img_path: str):
         try:
@@ -217,14 +326,14 @@ class Api:
                 image_bytes = f.read()
             image_base64 = base64.b64encode(image_bytes).decode("utf-8")
         except Exception as e:
-            return {"code": 102, "data": f"[Error] 读取图片失败: {str(e)}"}
+            return self._err(f"读取图片失败: {str(e)}", kind="io")
         return self._ocr_request(image_base64)
 
     def runBytes(self, image_bytes):
         try:
             image_base64 = base64.b64encode(image_bytes).decode("utf-8")
         except Exception as e:
-            return {"code": 102, "data": f"[Error] 图片编码失败: {str(e)}"}
+            return self._err(f"图片编码失败: {str(e)}", kind="encode")
         return self._ocr_request(image_base64)
 
     def runBase64(self, image_base64: str):
@@ -291,51 +400,21 @@ class Api:
             for table in result.get("TableDetections", []):
                 cells = table.get("Cells", [])
                 raw_cells_list.append(cells)
-                if not cells:
-                    tables.append([])
-                    continue
-
-                # 安全获取最大行列（RowBr/ColBr 表示结束边界，即实际行/列数）
-                max_row = max(cell.get("RowBr", 0) for cell in cells)
-                max_col = max(cell.get("ColBr", 0) for cell in cells)
-
-                # 创建二维表格网格
-                grid = [["" for _ in range(max_col)] for _ in range(max_row)]
-
-                # 填充单元格内容（带边界检查！）
-                for cell in cells:
-                    row_tl = cell.get("RowTl", -1)
-                    col_tl = cell.get("ColTl", -1)
-                    text = cell.get("Text", "")
-
-                    # 🔒 关键修复：防止 list index out of range
-                    if 0 <= row_tl < max_row and 0 <= col_tl < max_col:
-                        if grid[row_tl][col_tl] == "":
-                            grid[row_tl][col_tl] = text
-                    # 可选：记录异常单元格（调试用）
-                    # else:
-                    #     print(f"[WARN] Cell out of bounds: RowTl={row_tl}, ColTl={col_tl}, max_row={max_row}, max_col={max_col}")
-
-                tables.append(grid)
+                tables.append(self._grid_from_cells(cells))
 
             # 将表格转为纯文本（用于兼容上层 text/score 结构）
             table_texts = []
             for grid in tables:
-                lines = []
-                for row in grid:
-                    line = "\t".join(str(cell) for cell in row if cell)
-                    if line.strip():
-                        lines.append(line)
-                table_text = "\n".join(lines)
-                table_texts.append(table_text)
+                table_texts.append(self._grid_to_text(grid))
 
             # 构造兼容格式：每个表格作为一个“文本块”
             data = []
             for i, text in enumerate(table_texts):
                 if text.strip():
+                    box = self._safe_table_box(raw_cells_list[i] if i < len(raw_cells_list) else [])
                     data.append({
                         "text": text,
-                        "box": [],          # 表格无精确 box，可留空或估算
+                        "box": box,
                         "score": 1.0,       # 表格无置信度，设为 1.0
                         "type": "table",    # 新增类型标记！
                         "table_data": tables[i]  # 保留结构化数据
@@ -377,40 +456,25 @@ class Api:
             if not structured_cells:
                 # 全是非结构化文本，按顺序拼接
                 text = "\n".join(c.get("Text", "") for c in cells if c.get("Text", "").strip())
+                box = self._safe_table_box(cells)
                 return {
                     "code": 100,
-                    "data": [{"text": text, "box": [], "score": 1.0, "type": "table"}],
+                    "data": [{"text": text, "box": box, "score": 1.0, "type": "table"}],
                     "extra": {
                         "excel_base64": result.get("Data", ""),
                         "request_id": result.get("RequestId", "")
                     }
                 }
 
-            max_row = max(cell.get("RowBr", 0) for cell in structured_cells)
-            max_col = max(cell.get("ColBr", 0) for cell in structured_cells)
-            grid = [["" for _ in range(max_col)] for _ in range(max_row)]
-
-            for cell in structured_cells:
-                row_tl = cell.get("RowTl", -1)
-                col_tl = cell.get("ColTl", -1)
-                text = cell.get("Text", "")
-                if 0 <= row_tl < max_row and 0 <= col_tl < max_col:
-                    if grid[row_tl][col_tl] == "":
-                        grid[row_tl][col_tl] = text
-
-            # 转为文本
-            lines = []
-            for row in grid:
-                line = "\t".join(str(cell) for cell in row if cell)
-                if line.strip():
-                    lines.append(line)
-            table_text = "\n".join(lines)
+            grid = self._grid_from_cells(structured_cells)
+            table_text = self._grid_to_text(grid)
 
             data = []
             if table_text.strip():
+                box = self._safe_table_box(structured_cells)
                 data.append({
                     "text": table_text,
-                    "box": [],
+                    "box": box,
                     "score": 1.0,
                     "type": "table",
                     "table_data": grid
@@ -427,4 +491,4 @@ class Api:
             }
 
         else:
-            return {"code": 102, "data": f"[Error] 不支持的接口: {self.api_type}"}
+            return self._err(f"不支持的接口: {self.api_type}", kind="api")
