@@ -29,8 +29,6 @@ class Api:
             "GeneralEfficientOCR",
             "GeneralFastOCR",
             "FormulaOCR",
-            "RecognizeTableOCR" ,
-            "RecognizeTableAccurateOCR",
             "TableOCR",
             "EnglishOCR" ,
             "AdvertiseOCR"
@@ -47,14 +45,6 @@ class Api:
 
         self.region = argd.get("region", self.region)
         self.ssl_verify = argd.get("ssl_verify", self.ssl_verify)
-
-        self.is_pdf = argd.get("is_pdf", False)
-        pdf_page_number = argd.get("pdf_page_number", 1)
-        try:
-            self.pdf_page_number = max(1, int(pdf_page_number))
-        except Exception:
-            self.pdf_page_number = 1
-        self.table_language = argd.get("table_language", "zh").strip().lower()
 
         # GeneralBasicOCR 特有参数
         if self.api_type == "GeneralBasicOCR":
@@ -77,15 +67,6 @@ class Api:
         else:
             self.language_type = "auto"
 
-        # RecognizeTableOCR 特有参数
-        if self.api_type == "RecognizeTableOCR":
-            self.table_language = "jap" if self.table_language in ("jap", "japanese") else "zh"
-
-        # RecognizeTableAccurateOCR 特有参数
-        if self.api_type == "RecognizeTableAccurateOCR":
-            # PDF 时传页码，图片则不传
-            pass
-            
         # 在 RecognizeTableAccurateOCR 之后添加：
         if self.api_type == "TableOCR":
             # TableOCR 无特殊参数，仅需图片
@@ -202,8 +183,6 @@ class Api:
             "GeneralEfficientOCR": common_config,
             "GeneralFastOCR": common_config,
             "FormulaOCR": common_config,
-            "RecognizeTableOCR": common_config,
-            "RecognizeTableAccurateOCR": common_config,
             "TableOCR": common_config,
             "EnglishOCR": common_config,
             "AdvertiseOCR":common_config,
@@ -224,16 +203,6 @@ class Api:
         # GeneralBasicOCR 参数
         if self.api_type == "GeneralBasicOCR":
             payload["LanguageType"] = self.language_type
-        # RecognizeTableOCR 参数
-        elif self.api_type == "RecognizeTableOCR":
-            payload["IsPdf"] = self.is_pdf
-            if self.is_pdf:
-                payload["PdfPageNumber"] = self.pdf_page_number
-            payload["TableLanguage"] = self.table_language
-        # RecognizeTableAccurateOCR 参数
-        elif self.api_type == "RecognizeTableAccurateOCR":
-            if self.is_pdf:
-                payload["PdfPageNumber"] = self.pdf_page_number
         # TableOCR：仅需 ImageBase64，无其他参数
         elif self.api_type == "TableOCR":
             # payload 已包含 ImageBase64，无需额外操作
@@ -340,7 +309,7 @@ class Api:
         return self._ocr_request(image_base64)
 
     def _parse_result(self, result):
-        # 通用 OCR 接口（除 FormulaOCR 和 RecognizeTableOCR）
+        # 通用 OCR 接口（除 FormulaOCR 和 TableOCR）
         if self.api_type in [
             "GeneralBasicOCR",
             "GeneralAccurateOCR",
@@ -393,47 +362,6 @@ class Api:
                 return {"code": 100, "data": data, "extra": {"request_id": request_id}}
             else:
                 return {"code": 101, "data": "", "extra": {"request_id": request_id}}
-
-        elif self.api_type in ["RecognizeTableOCR", "RecognizeTableAccurateOCR"]:
-            tables = []
-            raw_cells_list = []
-            for table in result.get("TableDetections", []):
-                cells = table.get("Cells", [])
-                raw_cells_list.append(cells)
-                tables.append(self._grid_from_cells(cells))
-
-            # 将表格转为纯文本（用于兼容上层 text/score 结构）
-            table_texts = []
-            for grid in tables:
-                table_texts.append(self._grid_to_text(grid))
-
-            # 构造兼容格式：每个表格作为一个“文本块”
-            data = []
-            for i, text in enumerate(table_texts):
-                if text.strip():
-                    box = self._safe_table_box(raw_cells_list[i] if i < len(raw_cells_list) else [])
-                    data.append({
-                        "text": text,
-                        "box": box,
-                        "score": 1.0,       # 表格无置信度，设为 1.0
-                        "type": "table",    # 新增类型标记！
-                        "table_data": tables[i]  # 保留结构化数据
-                    })
-
-            excel_b64 = result.get("Data", "")
-            angle = result.get("Angle", 0)
-            request_id = result.get("RequestId", "")
-
-            return {
-                "code": 100,
-                "data": data,
-                "extra": {
-                    "excel_base64": excel_b64,
-                    "angle": angle,
-                    "request_id": request_id,
-                    "raw_cells": raw_cells_list
-                }
-            }
 
         elif self.api_type == "TableOCR":
             # 旧版 TableOCR 解析

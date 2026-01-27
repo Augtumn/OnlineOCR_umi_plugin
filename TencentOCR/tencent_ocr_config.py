@@ -48,8 +48,6 @@ localOptions = {
             ["FormulaOCR",tr("公式识别")],
             ["GeneralHandwritingOCR",tr("通用手写体识别")],
             ["TableOCR",tr("表格识别（V1）")],
-            ["RecognizeTableOCR",tr("表格识别（V2）")],
-            ["RecognizeTableAccurateOCR",tr("表格识别（V3）")],
             ["EnglishOCR",tr("英文识别")],
             ["AdvertiseOCR",tr("广告识别")],
         ],
@@ -103,31 +101,6 @@ localOptions = {
         "type": "boolean",
         "default": True,
         "toolTip": tr("仅对本次识别生效。关闭可绕过证书问题，但不安全。"),
-    },
-    "is_pdf": {
-        "title": tr("PDF 模式"),
-        "type": "boolean",
-        "default": False,
-        "toolTip": tr("表格识别为 PDF 时请开启。"),
-    },
-    "pdf_page_number": {
-        "title": tr("PDF 页码"),
-        "type": "number",
-        "default": 1,
-        "min": 1,
-        "max": 200,
-        "unit": tr("页"),
-        "toolTip": tr("仅在 PDF 模式下生效。"),
-    },
-    "table_language": {
-        "title": tr("表格语言"),
-        "type": "enum",
-        "optionsList": [
-            ["zh", tr("中文")],
-            ["jap", tr("日文")],
-        ],
-        "default": "zh",
-        "toolTip": tr("仅对表格识别（V2）生效。"),
     },
 
 }
