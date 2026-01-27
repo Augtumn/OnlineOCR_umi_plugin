@@ -25,6 +25,12 @@ globalOptions = {
         "max": 60,
         "unit": tr("秒"),
     },
+    "debug_log": {
+        "title": tr("调试日志"),
+        "type": "boolean",
+        "default": False,
+        "toolTip": tr("输出插件调试信息（仅排查问题时开启）。"),
+    },
     "ssl_verify": {
         "title": tr("SSL 验证"),
         "type": "boolean",

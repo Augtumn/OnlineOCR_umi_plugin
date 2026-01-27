@@ -15,6 +15,7 @@ class Api:
         self.secret_key = global_argd.get("secret_key", "").strip()
         self.timeout = global_argd.get("timeout", 10)
         self.ssl_verify = global_argd.get("ssl_verify", True)
+        self.debug_log = global_argd.get("debug_log", False)
         self.host = None
         self.endpoint = None
         self.region = "ap-guangzhou"
@@ -45,6 +46,7 @@ class Api:
 
         self.region = argd.get("region", self.region)
         self.ssl_verify = argd.get("ssl_verify", self.ssl_verify)
+        self.debug_log = argd.get("debug_log", self.debug_log)
 
         # GeneralBasicOCR 特有参数
         if self.api_type == "GeneralBasicOCR":
@@ -75,7 +77,7 @@ class Api:
         if timeout is not None:
             self.timeout = timeout
         elif self.api_type == "TableOCR":
-            self.timeout = max(self.timeout, 30)
+            self.timeout = max(self.timeout, 60)
 
         config = self._get_api_config()
         if not config:
@@ -99,12 +101,26 @@ class Api:
         else:
             data = f"[Error] {message}"
             clean = message
-        return {"code": code, "data": data, "error": {"message": clean, "type": kind}}
+        return {
+            "code": code,
+            "data": data,
+            "error": {"message": clean, "type": self._normalize_error_type(kind)}
+        }
+
+    def _normalize_error_type(self, kind):
+        allowed = {
+            "auth", "network", "http", "api", "input", "io", "encode", "request", "config"
+        }
+        return kind if kind in allowed else "request"
 
     def _get_ssl_context(self):
         if self.ssl_verify:
             return None
         return ssl._create_unverified_context()
+
+    def _debug(self, message):
+        if self.debug_log:
+            print(f"[TencentOCR] {message}")
 
     def _grid_from_cells(self, cells):
         if not cells:
@@ -169,6 +185,27 @@ class Api:
         if min_x is None or min_y is None or max_x is None or max_y is None:
             return [[0, 0], [1, 0], [1, 1], [0, 1]]
         return [[min_x, min_y], [max_x, min_y], [max_x, max_y], [min_x, max_y]]
+
+    def _cell_sort_key(self, cell):
+        row = cell.get("RowTl", -1)
+        col = cell.get("ColTl", -1)
+        if row >= 0 and col >= 0:
+            return (0, row, col, 0, 0)
+
+        x = 0
+        y = 0
+        polygon = cell.get("Polygon") or cell.get("polygon")
+        if isinstance(polygon, list) and polygon:
+            pt = polygon[0]
+            if isinstance(pt, dict):
+                x = pt.get("X", pt.get("x", 0))
+                y = pt.get("Y", pt.get("y", 0))
+                return (1, y, x, 0, 0)
+        rect = cell.get("Rect") or cell.get("rect") or cell.get("Location") or cell.get("location")
+        if isinstance(rect, dict):
+            x = rect.get("X", rect.get("x", 0))
+            y = rect.get("Y", rect.get("y", 0))
+        return (1, y, x, 0, 0)
 
     def _get_api_config(self):
         common_config = {
@@ -374,7 +411,9 @@ class Api:
                     "data": "",
                     "extra": {
                         "excel_base64": "",
-                        "request_id": result.get("RequestId", "")
+                        "request_id": result.get("RequestId", ""),
+                        "angle": result.get("Angle", 0),
+                        "raw_cells": raw_cells_list
                     }
                 }
 
@@ -383,14 +422,19 @@ class Api:
 
             if not structured_cells:
                 # 全是非结构化文本，按顺序拼接
-                text = "\n".join(c.get("Text", "") for c in cells if c.get("Text", "").strip())
+                sorted_cells = sorted(cells, key=self._cell_sort_key)
+                text = "\n".join(
+                    c.get("Text", "") for c in sorted_cells if c.get("Text", "").strip()
+                )
                 box = self._safe_table_box(cells)
                 return {
                     "code": 100,
                     "data": [{"text": text, "box": box, "score": 1.0, "type": "table"}],
                     "extra": {
                         "excel_base64": result.get("Data", ""),
-                        "request_id": result.get("RequestId", "")
+                        "request_id": result.get("RequestId", ""),
+                        "angle": result.get("Angle", 0),
+                        "raw_cells": raw_cells_list
                     }
                 }
 
@@ -414,6 +458,7 @@ class Api:
                 "extra": {
                     "excel_base64": result.get("Data", ""),
                     "request_id": result.get("RequestId", ""),
+                    "angle": result.get("Angle", 0),
                     "raw_cells": raw_cells_list
                 }
             }

@@ -31,6 +31,12 @@ globalOptions = {
         "default": True,
         "toolTip": tr("是否启用 SSL 证书验证。关闭可绕过证书问题，但不安全。"),
     },
+    "debug_log": {
+        "title": tr("调试日志"),
+        "type": "boolean",
+        "default": False,
+        "toolTip": tr("输出插件调试信息（仅排查问题时开启）。"),
+    },
 }
 
 # 局部配置（仅保留文本 + 表格识别）

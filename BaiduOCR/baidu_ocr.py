@@ -11,10 +11,17 @@ class Api:
         self.secret_key = global_argd.get("secret_key", "").strip()
         self.timeout = global_argd.get("timeout", 10)
         self.ssl_verify = global_argd.get("ssl_verify", True)
+        self.debug_log = global_argd.get("debug_log", False)
 
         self.access_token = None
         self._last_error = ""
         # URL 映射将在 _ocr_request 中动态构建，此处无需预设
+
+    def _normalize_error_type(self, kind):
+        allowed = {
+            "auth", "network", "http", "api", "input", "io", "encode", "request", "config"
+        }
+        return kind if kind in allowed else "request"
 
     def _err(self, message, kind="request", code=102):
         if not message:
@@ -25,12 +32,20 @@ class Api:
         else:
             data = f"[Error] {message}"
             clean = message
-        return {"code": code, "data": data, "error": {"message": clean, "type": kind}}
+        return {
+            "code": code,
+            "data": data,
+            "error": {"message": clean, "type": self._normalize_error_type(kind)}
+        }
 
     def _get_ssl_context(self):
         if self.ssl_verify:
             return None
         return ssl._create_unverified_context()
+
+    def _debug(self, message):
+        if self.debug_log:
+            print(f"[BaiduOCR] {message}")
 
     def _get_access_token(self):
         url = 'https://aip.baidubce.com/oauth/2.0/token'
@@ -50,6 +65,7 @@ class Api:
                     self._last_error = ""
                     return result['access_token']
                 self._last_error = f"[Error] 获取access_token失败: {result}"
+                self._debug(self._last_error)
                 return None
         except HTTPError as e:
             body = ""
@@ -59,12 +75,15 @@ class Api:
                 pass
             detail = body or str(e.reason)
             self._last_error = f"[Error] 获取access_token HTTP {e.code}: {detail}"
+            self._debug(self._last_error)
             return None
         except URLError as e:
             self._last_error = f"[Error] 获取access_token网络异常: {str(e.reason)}"
+            self._debug(self._last_error)
             return None
         except Exception as e:
             self._last_error = f"[Error] 获取access_token异常: {str(e)}"
+            self._debug(self._last_error)
             return None
 
     def _encode_bytes(self, image_bytes):
@@ -92,6 +111,7 @@ class Api:
 
         self.timeout = argd.get("timeout", self.timeout)
         self.ssl_verify = argd.get("ssl_verify", self.ssl_verify)
+        self.debug_log = argd.get("debug_log", self.debug_log)
 
         if not self.api_key:
             return "[Error] API Key 不能为空，请在插件设置中填写。"
