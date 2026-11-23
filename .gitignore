@@ -67,3 +67,10 @@ BaiduOCR/__pycache__/baidu_ocr.cpython-38.pyc
 TencentOCR/__pycache__/__init__.cpython-38.pyc
 TencentOCR/__pycache__/tencent_ocr_config.cpython-38.pyc
 TencentOCR/__pycache__/tencent_ocr.cpython-38.pyc
+umi_plugin_v6/
+win7_x64_PaddleOCR-json_PP-OCRv5/
+win7_x64_PaddleOCR-json_PP-OCRv5_GPU/
+
+# Python 缓存
+__pycache__/
+*.pyc

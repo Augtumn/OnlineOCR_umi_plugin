@@ -77,7 +77,7 @@ localOptions = {
             ["SWE", "瑞典文"],
             ["NOR", "挪威文"],
         ],
-        "toolTip": tr("指定要识别的语言类型。"),
+        "toolTip": tr("指定要识别的语言类型。仅通用文字识别（标准/含位置版）支持，其余接口为固定语言。"),
     },
     "detect_direction": {
         "title": tr("自动旋转"),
@@ -90,5 +90,18 @@ localOptions = {
         "type": "boolean",
         "default": False,
         "toolTip": tr("是否输出段落信息。"),
+    },
+    "return_excel": {
+        "title": tr("返回 Excel 数据"),
+        "type": "boolean",
+        "default": False,
+        "toolTip": tr("仅表格文字识别 V2 有效。开启后接口额外返回 Excel（base64），\
+此时不返回可排版的文本结果，识别内容为空属于正常现象。"),
+    },
+    "cell_contents": {
+        "title": tr("返回单元格字号"),
+        "type": "boolean",
+        "default": False,
+        "toolTip": tr("仅表格文字识别 V2 有效。开启后单元格额外返回字号等信息。"),
     },
 }
