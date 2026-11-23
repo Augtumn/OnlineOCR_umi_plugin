@@ -134,22 +134,70 @@ class TestParseText(Base):
         self.assertEqual(out["code"], 101)
 
 
-class TestParseFormula(Base):
-    def test_basic(self):
-        self.start_ok(api_type="FormulaOCR")
-        resp = {"RequestId": "r2", "Angle": -90,
-                "FormulaInfos": [{"DetectedText": "E=mc^2", "X": 10, "Y": 20, "Width": 90, "Height": 40,
-                                  "Confidence": 95}]}
-        out = self.api._parse_result(resp)
-        self.assertEqual(out["code"], 100)
-        self.assertEqual(out["data"][0]["text"], "E=mc^2")
-        self.assertEqual(out["data"][0]["box"][2], [100, 60])
-        self.assertEqual(out["extra"]["angle"], -90)
+class TestRetiredActions(Base):
+    """腾讯公式识别已下线：旧配置要给出可操作的提示，而不是含糊报错。"""
 
-    def test_empty(self):
-        self.start_ok(api_type="FormulaOCR")
-        out = self.api._parse_result({"FormulaInfos": []})
-        self.assertEqual(out["code"], 101)
+    def test_formula_offline_message(self):
+        msg = self.api.start({"api_type": "FormulaOCR"})
+        self.assertTrue(msg.startswith("[Error]"), msg)
+        self.assertIn("下线", msg)
+        self.assertIn("百度", msg)
+
+    def test_recognize_formula_deprecated_message(self):
+        msg = self.api.start({"api_type": "RecognizeFormulaOCR"})
+        self.assertTrue(msg.startswith("[Error]"), msg)
+        self.assertIn("下线", msg)
+
+    def test_formula_not_in_ui_options(self):
+        """公式识别已从界面选项里移除，避免用户再选到死接口。"""
+        import types
+        if "plugin_i18n" not in sys.modules:
+            stub = types.ModuleType("plugin_i18n")
+            stub.Translator = lambda *args, **kwargs: (lambda text: text)
+            sys.modules["plugin_i18n"] = stub
+        import tencent_ocr_config
+        options = [opt[0] for opt in tencent_ocr_config.localOptions["api_type"]["optionsList"]]
+        self.assertNotIn("FormulaOCR", options)
+        self.assertNotIn("RecognizeFormulaOCR", options)
+        self.assertIn("RecognizeTableOCR", options)
+
+    def test_action_offline_hint(self):
+        """即使绕过 start() 直接调，ActionOffline 也要附带提示。"""
+        self.start_ok(api_type="GeneralAccurateOCR")
+        orig_send = tencent_ocr.Api._send
+        tencent_ocr.Api._send = lambda *a: (
+            {"Error": {"Code": "ActionOffline", "Message": "接口下线"}}, None, "", False)
+        try:
+            out = self.api._ocr_request("BASE64DATA")
+        finally:
+            tencent_ocr.Api._send = orig_send
+        self.assertEqual(out["code"], 102)
+        self.assertIn("已下线", out["data"])
+
+    def test_package_run_out_hint(self):
+        self.start_ok(api_type="GeneralAccurateOCR")
+        orig_send = tencent_ocr.Api._send
+        tencent_ocr.Api._send = lambda *a: (
+            {"Error": {"Code": "ResourceUnavailable.ResourcePackageRunOut",
+                       "Message": "账号资源包耗尽。"}}, None, "", False)
+        try:
+            out = self.api._ocr_request("BASE64DATA")
+        finally:
+            tencent_ocr.Api._send = orig_send
+        self.assertIn("资源包", out["data"])
+
+    def test_deprecated_warning_kept_in_extra(self):
+        self.start_ok(api_type="GeneralAccurateOCR")
+        orig_send = tencent_ocr.Api._send
+        tencent_ocr.Api._send = lambda *a: (
+            {"TextDetections": [{"DetectedText": "A", "Polygon": [{"X": 0, "Y": 0}] * 3}],
+             "DeprecatedWarning": "接口下线", "RequestId": "r"}, None, "", False)
+        try:
+            out = self.api._ocr_request("BASE64DATA")
+        finally:
+            tencent_ocr.Api._send = orig_send
+        self.assertEqual(out["code"], 100)
+        self.assertEqual(out["extra"]["deprecated"], "接口下线")
 
 
 class TestParseTableV1(Base):

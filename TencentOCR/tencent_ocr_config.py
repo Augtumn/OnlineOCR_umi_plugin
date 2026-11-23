@@ -51,7 +51,6 @@ localOptions = {
             ["GeneralAccurateOCR", tr("通用文字识别（高精度版）")],
             ["GeneralEfficientOCR",tr("通用印刷体识别（精简版）")],
             ["GeneralFastOCR",tr("通用印刷体识别（高速版）")],
-            ["FormulaOCR",tr("公式识别")],
             ["GeneralHandwritingOCR",tr("通用手写体识别")],
             ["RecognizeTableOCR",tr("表格识别 V2")],
             ["RecognizeTableAccurateOCR",tr("表格识别 V2（高精度版）")],
@@ -60,7 +59,7 @@ localOptions = {
             ["AdvertiseOCR",tr("广告识别")],
         ],
         "default": "GeneralAccurateOCR",
-        "toolTip": tr("选择要调用的腾讯云 OCR 接口。"),
+        "toolTip": tr("选择要调用的腾讯云 OCR 接口。腾讯云「公式识别」已下线，公式请改用百度插件。"),
     },
     "language_type": {
         "title": tr("语言类型"),

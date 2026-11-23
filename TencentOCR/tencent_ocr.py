@@ -11,19 +11,28 @@ from urllib.error import URLError, HTTPError
 import ssl
 
 # 支持的 Action。表格类包含老版 TableOCR（V1，仅老客户可续费）与 V2 两个接口。
+# FormulaOCR 已于 2025 年被腾讯下线（返回 ActionOffline），替代的 RecognizeFormulaOCR
+# 同样带 DeprecatedWarning，故不再提供腾讯公式识别，公式请改用百度接口。
 _SUPPORTED_ACTIONS = (
     "GeneralBasicOCR",
     "GeneralAccurateOCR",
     "GeneralHandwritingOCR",
     "GeneralEfficientOCR",
     "GeneralFastOCR",
-    "FormulaOCR",
     "TableOCR",
     "RecognizeTableOCR",
     "RecognizeTableAccurateOCR",
     "EnglishOCR",
     "AdvertiseOCR",
 )
+
+# 已下线 / 不再可用的 Action：保留提示，便于旧配置直接给出可操作的信息
+_RETIRED_ACTIONS = {
+    "FormulaOCR": "腾讯云「公式识别（FormulaOCR）」已下线（ActionOffline），"
+                  "请改用百度的「数学公式识别」。",
+    "RecognizeFormulaOCR": "腾讯云「公式识别（RecognizeFormulaOCR）」已被官方标记下线，"
+                           "请改用百度的「数学公式识别」。",
+}
 
 # 通用文本类接口（返回 TextDetections）
 _TEXT_ACTIONS = (
@@ -44,7 +53,16 @@ _TIMEOUT_FLOOR = {
     "TableOCR": 60,
     "RecognizeTableOCR": 60,
     "RecognizeTableAccurateOCR": 60,
-    "FormulaOCR": 30,
+}
+
+# 错误码 → 可操作的提示
+_ERROR_HINTS = {
+    "ActionOffline": "该接口已下线，请改选其它接口",
+    "ResourceUnavailable.ResourcePackageRunOut": "该接口的资源包已耗尽，请到控制台续购或换用其它接口",
+    "AuthFailure.SignatureExpire": "本机时间偏差过大，校准系统时间即可",
+    "AuthFailure.SecretIdNotFound": "SecretId 不存在，请检查密钥",
+    "LimitExceeded": "超出调用频率或配额，请降低批量速度",
+    "RequestLimitExceeded": "触发限流，请降低批量速度",
 }
 
 # 可重试的错误码（限流 / 服务端抖动）
@@ -111,6 +129,9 @@ class Api:
 
     def start(self, argd):
         api_type = argd.get("api_type", "GeneralBasicOCR")
+        if api_type in _RETIRED_ACTIONS:
+            # 旧配置里可能还存着已下线的接口，这里给出明确的替代方案
+            return "[Error] " + _RETIRED_ACTIONS[api_type]
         if api_type not in _SUPPORTED_ACTIONS:
             return f"[Error] 不支持的接口: {api_type}"
         self.api_type = api_type
@@ -253,9 +274,25 @@ class Api:
                 self._debug(f"可重试错误（{code}），0.6s 后重试一次")
                 time.sleep(0.6)
                 return self._ocr_request(image_base64, allow_retry=False)
-            return self._err(text, kind=self._error_kind(code))
+            hint = self._hint_for(code)
+            if hint and hint not in message:
+                text += f"（{hint}）"
+            extra = {}
+            if resp.get("DeprecatedWarning"):
+                extra["deprecated"] = resp["DeprecatedWarning"]
+            return self._err(text, kind=self._error_kind(code), extra=extra or None)
 
         return self._parse_result(resp)
+
+    @staticmethod
+    def _hint_for(code):
+        if code in _ERROR_HINTS:
+            return _ERROR_HINTS[code]
+        # 形如 LimitExceeded.QpsLimitExceeded 的变体也命中最上层提示
+        for key, hint in _ERROR_HINTS.items():
+            if code.startswith(key + "."):
+                return hint
+        return ""
 
     def _send(self, req):
         """返回 (Response字典, 错误信息, 错误类型, 是否可重试)"""
@@ -329,6 +366,8 @@ class Api:
         extra = {}
         if "RequestId" in result:
             extra["request_id"] = result["RequestId"]
+        if result.get("DeprecatedWarning"):
+            extra["deprecated"] = result["DeprecatedWarning"]
 
         if self.api_type in _TEXT_ACTIONS:
             data = []
@@ -342,27 +381,6 @@ class Api:
                     box = [[0, top], [200, top], [200, top + 40], [0, top + 40]]
                 score = item.get("Confidence", 1.0)
                 data.append({"text": text, "box": box, "score": score})
-            if data:
-                return {"code": 100, "data": data, "extra": extra}
-            return {"code": 101, "data": "", "extra": extra}
-
-        if self.api_type == "FormulaOCR":
-            data = []
-            for item in result.get("FormulaInfos") or []:
-                text = (item.get("DetectedText") or "").strip()
-                if not text:
-                    continue
-                x = item.get("X", 0)
-                y = item.get("Y", 0)
-                w = max(item.get("Width", 0), 1)
-                h = max(item.get("Height", 0), 1)
-                box = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]]
-                data.append({
-                    "text": text,
-                    "box": box,
-                    "score": item.get("Confidence", 1.0),
-                })
-            extra["angle"] = result.get("Angle", 0)
             if data:
                 return {"code": 100, "data": data, "extra": extra}
             return {"code": 101, "data": "", "extra": extra}
